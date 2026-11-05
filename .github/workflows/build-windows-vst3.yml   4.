@@ -1,0 +1,44 @@
+name: Build CBVB Sampler Windows VST3
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, master]
+
+jobs:
+  windows-vst3:
+    runs-on: windows-2022
+    steps:
+      - name: Check out sampler source
+        uses: actions/checkout@v4
+      - name: Verify source headers before compilation
+        shell: pwsh
+        run: |
+          $required = @('CMakeLists.txt', 'Source/PluginProcessor.cpp', 'Source/NcwDecoder.h', 'Source/SfzParser.h')
+          foreach ($file in $required) {
+            if (-not (Test-Path $file)) { throw "Missing source file: $file" }
+          }
+          $decoder = Get-Content 'Source/NcwDecoder.h' -Raw
+          if ($decoder.Contains('__builtin_memcpy')) { throw 'Old NCW decoder found. Upload the clean source package.' }
+          if (-not $decoder.Contains('} // namespace ncw')) { throw 'NCW decoder file appears truncated.' }
+          $sfz = Get-Content 'Source/SfzParser.h' -Raw
+          if (-not $sfz.Contains('namespace sfz')) { throw 'SFZ parser file appears truncated.' }
+          Write-Host 'Required source files are present, and NCW memcpy fix is in place.'
+      - name: Configure with JUCE 8.0.4
+        shell: pwsh
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - name: Compile release VST3
+        shell: pwsh
+        run: cmake --build build --config Release --target CBVBSampler_VST3 --parallel 4
+      - name: Package Windows VST3
+        shell: pwsh
+        run: |
+          $plugin = Get-ChildItem -Path build -Directory -Recurse -Filter "CBVB Sampler.vst3" | Where-Object { Test-Path (Join-Path $_.FullName "Contents\x86_64-win\CBVB Sampler.vst3") } | Select-Object -First 1
+          if (-not $plugin) { throw "Compiled Windows VST3 bundle was not found" }
+          Compress-Archive -Path $plugin.FullName -DestinationPath "CBVB-Sampler-Windows-VST3.zip" -Force
+      - name: Upload compiled VST3 ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: CBVB-Sampler-Windows-VST3
+          path: CBVB-Sampler-Windows-VST3.zip
+          if-no-files-found: error
